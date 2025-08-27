@@ -1,0 +1,285 @@
+\documentclass{article}
+
+% Packages -----------------------------------------
+\usepackage{graphicx}   % Inserting Images
+\usepackage{amsmath}    % Maths symbols
+\usepackage{amssymb}
+\usepackage{biblatex}
+\addbibresource{ref.bib} % import the bibliography file
+\usepackage[parfill]{parskip}   % Getting rid of extra spaces between paragraphs
+\usepackage{float}
+\usepackage[final]{hyperref}    % Adds hyper links inside the generated pdf file
+\hypersetup{              
+	colorlinks=true,       
+	linkcolor=blue,        % Colour of internal links
+	citecolor=magenta,     % Colour of links to bibliography
+	filecolor=magenta,     % Colour of file links
+	urlcolor=blue          % Colour of urls
+}
+\usepackage[margin=0.7in, a4paper]{geometry}  % Decreases margins
+
+% ----------------------------------------------------
+
+\begin{document}
+
+\title{AST4007W - Computational Methods \\ Project 2 - Numerical Integration}
+\author{Carys Gilbert - GLBCAR006}
+\date{June 2024}
+
+\maketitle
+
+ % ----------------------------------------------------
+
+\section*{Introduction}
+
+    In this project we are tasked with judging a water rocket building contest, by determining which rocket reached the greatest height based on its measured acceleration over time.
+    
+    The participants in the contest were tasked with building water rockets from 2L plastic bottles, which contained a lightweight accelerometer and gyroscope system. The typical rocket design is shown in Figure \ref{fig:typical-rocket} below. 
+
+    
+    \begin{figure}[H]
+        \centering
+        \includegraphics[width=0.4\textwidth]{Typical Rocket.png}
+        \caption{A typical water rocket design, with the accelerometer-gyroscope system attached. Taken from \cite{project2_manual}.}
+        \label{fig:typical-rocket}
+    \end{figure}
+        
+    The accelerometer was calibrated such that upwards acceleration was recorded as positive, downwards acceleration as negative, and no acceleration (0 ms$^{-1}$) when the rocket was at rest. The gyroscope ensured that the accelerometer was aligned with the vertical axis as the rocket moves.
+
+    It is possible to reconstruct the rockets' journeys by integrating the acceleration twice to find the displacement. However, as we are working with an unknown 'acceleration function' and a fixed number of recorded data points, and we are interested in finding the integral value at each time step, a method of cumulative numerical integration must be employed to determine the velocities and displacements over time of the water rockets. 
+    
+    As we cannot integrate the acceleration analytically, there will be a `truncation error' associated with the integration estimate that must be accounted for. The accelerometers used have an inherent uncertainty of 2\% on every measurement, which must also be taken into account. Both sets of errors must be combined and correctly propagated through both instances of integration to arrive at the final uncertainty.  
+    
+    In the end, the rocket(s) that reached the maximum height are declared the winner(s). It is possible to have more than one winner, as if any rockets have overlapping expanded uncertainties (using a coverage factor of 1), they are counted as having the same ranking. Thus, our goal is to correctly determine the displacements from the acceleration data and propagate through and combine both the measurement uncertainties and truncation errors to find the overall winner(s).
+    
+\section*{Method}
+
+    \subsection*{Cumulative Numerical Integration}
+
+         The 'Composite Trapezoid Rule' method of numerical integration was chosen, which estimates the value of an integral given a discrete data set as shown in Equation \ref{eq:composite-trap} below.
+
+        \begin{equation}
+            \int^{x_n}_{x_0} f(x) dx \approx \frac{\Delta x}{2} \Biggl[ y_0 + 2\Biggl( \sum^{n -1}_{i = 1} y_i \Biggr) + y_n \Biggr] = I_{\Delta x} (y_0, ..., y_n)
+            \label{eq:composite-trap}
+        \end{equation}
+
+    This method was implemented cumulatively using Scipy's `scipy.integrate' module. This implementation does require the integral to have an initial value of 0 to correctly estimate the integral and return an array of results the same size as the initial one. As explained below, this is not an issue for this scenario.
+
+    The cumulative integration was performed twice to determine the displacement, as we are starting with the acceleration data. The relation between acceleration, velocity, and displacement is shown in Equation \ref{eq:acc-to-disp}:
+        
+        \begin{equation}
+        \begin{split}
+            v(t) & = v(t_0) + \int^t_{t_0} a(t^*) dt^* \\
+            x(t) & = x(t_0) + \int^t_{t_0} v(t^*) dt^* \\
+        \end{split}
+        \label{eq:acc-to-disp}
+        \end{equation}
+
+        In this case, the rockets always start from rest on the ground, i.e. $v(t_0) = x(t_0) = 0$. Thus, the first terms of the above equations can be ignored, and the velocity/displacement values at each time step can be taken to be equal to the corresponding integral values, found by implementing $I_{\Delta x} (y_0, ..., y_i)$ cumulatively.
+
+    \subsection*{Estimating Truncation Errors}
+
+        To estimate the errors associated with the cumulative numerical integration, the method of Richardson's Extrapolation was chosen. This is itself a method of numerical integration, however it is not appropriate for the given data. The error estimation for a given set of points $(y_0, ..., y_m)$ that are integrated using a method $I_{\Delta x}$ with constant sub-interval width $(\Delta x)$ is given in Equation \ref{eq:richardsons-error}. 
+
+        \begin{equation}
+            E_{\Delta x} (y_0, ..., y_m) = \frac{I_{\Delta x}(y_0, ..., y_m) - I_{2 \Delta x}(y_0, y_2, ..., y_m)}{2^p -1}
+            \label{eq:richardsons-error}
+        \end{equation}
+
+        Where $I_{2 \Delta x}$ is the cumulative integral over every second point with sub-interval width that is double the original. When using the Trapezoid rule, $p = 2$, meaning that the denominator in Equation \ref{eq:richardsons-error} is 3. 
+        
+        It is important to note that the numerator changes for odd or even terms, as if m is odd, $I_{2 \Delta x}$ cannot integrate to $x_m$. As such, the truncation error for each point depends on if i is odd or even. For odd i values, the first (or last) sub-interval can be calculate separately, and Richardson's extrapolation applied to the remaining sub-intervals. Thus, for the error approximation, the first sub-interval must not be included, and the error will tend to be underestimated. As such, the final truncation error for a given data point is given in Equation \ref{eq:truncation-error} below:
+
+        \begin{equation}
+            E_i = \frac{1}{3} \times \begin{cases}
+                I_{\Delta x}(y_0, ..., y_i) - I_{2 \Delta x}(y_0, y_2, ..., y_i) & \text{even } i \\
+                I_{\Delta x}(y_0, ..., y_i) - I_{\Delta x} (y_0, y_1) - I_{2 \Delta x}(y_1, y_3, ..., y_i) & \text{odd } i \\
+                \end{cases}
+            \label{eq:truncation-error}
+        \end{equation}
+
+        The above equation was implemented to work out the truncation error associated with each integral estimation.
+
+    \subsection*{Combining and Propagating Uncertainties}
+
+        In this scenario, there are two main sources of uncertainty. Namely, the inherent uncertainty of the accelerometer measurements ($u(y_i)$), and the truncation errors ($E_i$). These must both be propagated and combined to find the final associated uncertainty with the estimated displacements.
+        
+        The above truncation error estimate must be expressed as a standard uncertainty in order to be combined and propagated. We assume that the error interval contains all possible values, and thus a rectangular PDF is used to model the data. Therefore for a certain integral value $Y_i = I_{\Delta x}(y_0,...,y_i)$, the uncertainty due to the truncation error is given by:
+
+        \begin{equation}
+            u(Y_{i, trunc}) = \sqrt{\frac{E_i^2}{3}}
+            \label{truncation-uncert}
+        \end{equation}
+    
+        Following the GUM framework, the uncorrelated uncertainties associated with the acceleration measurements can be combined and propagated using the following method:
+
+        \begin{equation}
+            u(Y_{i, acc}) = \sqrt{ \sum^i_{j = 0} \Biggl( \frac{\partial I_{\Delta x}(y_0, ..., y_i)}{\partial y_j} \Biggr)^2 (u(y_j))^2 }
+            \label{eq:combining-acc-uncert}
+        \end{equation}
+
+        As we are using the Composite Trapezoid Rule method as described by Equation \ref{eq:composite-trap}, the partial derivatives in Equation \ref{eq:combining-acc-uncert} are given below:
+
+        \begin{equation}
+            \frac{\partial I_{\Delta x}(y_0,...,y_i)}{\partial y_j} = \begin{cases}
+                \frac{1}{2} \Delta x & j = 0 \text{ or } j = i \\
+                \Delta x & \text{else} \\
+            \end{cases}
+            \label{eq:partial-int}
+        \end{equation}
+
+        Thus, for a given integral value $Y_i$, the combined and propagated uncertainty is given by Equation \ref{eq:prop-uncert} below:
+
+        \begin{equation}
+            u(Y_i) = \sqrt{u(Y_{i, trunc})^2 + u(Y_{i, acc})^2} = \sqrt{ \sum^i_{j = 0} \Biggl( \frac{\partial I_{\Delta x}(y_0, ..., y_i)}{\partial y_j} \Biggr)^2 (u(y_j))^2 
+            + \frac{E_i^2}{3} }
+            \label{eq:prop-uncert}
+        \end{equation}
+
+\section*{Results}
+
+    \subsection*{Test Integral}
+
+        In order to ensure that the method of cumulatively determining the integral and estimating the associated truncation errors works as intended, it was tested on a know `test integral'. The function chosen and its known analytical integration solution are given below:
+
+        \begin{equation}
+            f(x) = cos(2x)
+            \label{eq:test-func}
+        \end{equation}
+        \begin{equation}
+            F(x) = \frac{1}{2}sin(2x) - \frac{1}{2}sin(0)
+            \label{eq:test-int}
+        \end{equation}
+
+        This function was chosen as it has an initial value of 0, a recognisable, periodic shape, an easy to find analytic integration solution, and covers both positive and negative values in a short range of x-values. A set of 20 evenly-spaced samples were generated for usage in the integral estimation. The analytical solution and cumulative numerical solution were plotted on the same set of axis, with the truncation errors represented. The absolute true error $(| Y_i - F(x_i) |)$ was compared to the estimated truncation error on a separate set of axes. This is shown in Figure \ref{fig:test-func-plot}.
+
+        From Figure \ref{fig:test-func-plot}, it is clear that the chosen method of cumulative numerical integration and truncation error estimation works well, with the two solutions agreeing at almost every point with a coverage factor of 1. From the lower plot, it is clear that the truncation error always under-estimates the true error, with the underestimation increasing for increasingly negative values of the function. The underestimation agrees with the prediction made above for using Richardson's extrapolation as a method for estimating the truncation errors.
+
+        It is important to note that the chosen method of integral estimation performs better with increased samples, and the difference in truncation error vs true error decreases. Thus, while the underestimation of errors is quite large in this example, for the sets of rocket data with $\sim 10^3$ samples, this will be much less of a problem.
+
+        \begin{figure}[H]
+            \centering
+            \includegraphics[width=0.8\textwidth]{Test_Function_with_Errors.png}
+            \caption{The analytical and cumulative numerical solutions to the integration of Eq \ref{eq:test-func} plotted from (0, $2 \pi$), with the absolute true error plotted against the estimated truncation error over the same domain below.}
+            \label{fig:test-func-plot}
+        \end{figure}
+
+    \subsection*{Test Data}
+
+        In order to ensure that the gyroscope/accelerometer system was working correctly, a set of `test data' was collected. The system was placed in padded housing and was dropped for 3m. The cumulative integration and uncertainty propagation methods were applied to the test data, and the results are plotted in Figure \ref{fig:test_data} below. The four different stages of the system's motion, namely: being held at rest, free-fall, impact with the ground, and resting on the ground, are marked. The time of transition between stages were found manually, and are summarised in Table \ref{tab:test_data_transitions}. 
+
+        The different transition times were found by examining the acceleration data. The first point is where the acceleration changes from 0 (at rest) to $\sim -9.8$ ms$^{-1}$ (Earth's gravitational acceleration). The second transition was where the acceleration changed from the negative free-fall values to large, positive values. The final transition is where the acceleration returns to 0, meaning it is once again at rest. 
+        
+        It is also possible to identify the stages using the velocity and displacement graphs, as there are similar transitions between different values at those points. When there is no acceleration, there is no force acting on the object, and so the velocity remains constant in those stages. The impact can also be clearly seen in the velocity graph as the sharp increase after the minimum is reached. It is slightly harder to differentiate the different transitions in the displacement graph, as they are not as `clear-cut'. The first is still easy to find, as it is where the displacement of the system changes from 0. 
+        
+        After that, however, there are some unexpected features within the graph. After the point of impact, the system appears to move downwards, as if its going in to the ground. This can be explained by the fact that the housing containing the system likely was compressed on impact, forcing the system further down than `ground level'. After that, the system appears to float upwards. This is clearly not representative of its physical movement, and it likely an artefact from the cumulative nature of the integration estimation. That would also explain the non-zero plateau of the velocity during the final stage, despite the system not moving. 
+
+        \begin{figure}[H]
+            \centering
+            \includegraphics[width=0.75\textwidth]{Test_Data_Plot.png}
+            \caption{The results of the cumulative integration and error propagation methods applied to the test data set. The different stages of motion are labelled, with the transitions marked by the red dashed lines.}
+            \label{fig:test_data}
+        \end{figure}
+
+        \begin{table}[H]
+            \centering
+            \begin{tabular}{|c|c|c|c|c|}
+            \hline
+                Stage & Held at Rest & Free-Fall & Impact with Ground & Resting on the Ground \\
+                \hline
+                 Time (s) & 0 - 2.143 & 2.143 - 2.937 & 2.937 - 3.933 & 3.933 - 7.197 \\
+                 \hline
+            \end{tabular}
+            \caption{The time spans of the different stages of motion present in the test data.}
+            \label{tab:test_data_transitions}
+        \end{table}
+
+        As we are only interested in the maximum displacement of the rockets, any artefacts present after the rockets are resting on the ground can be ignored, as they do not affect the final result. As such, the methods seem to be successfully computing both the velocity and displacement over time given the acceleration data, and the judging of the contest can now proceed.
+
+    \subsection*{Rocket Data}
+
+        Finally, the data for each of the rockets was doubly-integrated, and the uncertainties propagated. The results are plotted in Figures \ref{fig:RocketA}, \ref{fig:RocketB}, \ref{fig:RocketC}, \ref{fig:RocketD}, and \ref{fig:RocketE} below. In Figure \ref{fig:RocketA}, the different stages of motion, namely: pre-launch, thrust, free-fall, impact with the ground, and resting on the ground, are marked. As before, the times of the transitions between the stages were found by hand. These times are summarised in Table \ref{tab:rocketA_transitions}.
+
+        \begin{table}[H]
+            \centering
+            \begin{tabular}{|c|c|c|c|c|c|}
+            \hline
+                Stage & Pre-Launch & Thrust & Free-Fall & Impact with Ground & Resting on the Ground \\
+                \hline
+                 Time (s) & 0 - 2.450 & 2.450 - 2.627 & 2.627 - 6.550 & 6.550 - 7.550 & 7.550 - 11.780 \\
+                 \hline
+            \end{tabular}
+            \caption{The time spans of the different stages of motion present in the data of Rocket A.}
+            \label{tab:rocketA_transitions}
+        \end{table}
+
+        \begin{figure}[H]
+            \centering
+            \includegraphics[width=0.75\textwidth]{RocketA.png}
+            \caption{The results of the cumulative integration and error propagation methods applied to the data set of Rocket A. The different stages of motion are labelled, with the transitions marked by the red dashed lines.}
+            \label{fig:RocketA}
+        \end{figure}
+
+        Once again, the transition times were found by examining the acceleration data. The first point is when the acceleration changes from 0 to a large, positive value, indicating the start of the rocket's thrust stage. Then, the free-fall stage's start is marked by the change in acceleration from the positive value to to $\sim -9.8$ ms$^{-1}$. The impact stage transition was found as the point of change from the negative, free-fall values, to a large positive value (as with the test data). Finally, also as before, the final stage of rest was marked by the acceleration returning to 0 ms$^{-1}$.
+
+        Within the velocity graph, the different stages are also quite clear. For instance, the thrust stage stands out as the sharp, positive increase in velocity following the flat rest stage. The free-fall is characterised by a steady decrease in velocity (consistent with the rocket experiencing the constant force of gravity downwards), before another sharp increase as it hits the ground. Once again, the velocities plateaus as the rocket is at rest upon the ground. Looking at the displacement graph, the parabolic motion of the rocket in the air is very clearly seen. It is not easy to discern most of the changes between stages, as the motion of the rocket is quite smooth. The very clear transitions are from rest to thrust, and from free-fall to impact.  
+
+        As with the test data, there are some artefacts from the integration process. Namely, the non-zero final velocity plateau, the dip in displacement before rest, and the `floating upwards' of the rocket after impact. As shown in Figure \ref{fig:typical-rocket}, the accelerometer/gyroscope system is once again within housing, so it is reasonable to assume that the dip below can again be explained by the compression of the tip of the rocket at impact. The velocity and displacement artefacts during the final stage are again likely resulting from the cumulative integration method, as no area under the curve would become a constant area, and a constant area would become a constantly increasing area with successive cumulative integrations. These do not affect the main peak of the displacement, so can be ignored for the sake of judging the competition.
+
+        \begin{figure}[H]
+            \centering
+            \includegraphics[width=0.65\textwidth]{RocketB.png}
+            \caption{The results of the data set of Rocket B.}
+            \label{fig:RocketB}
+        \end{figure}
+
+        \begin{figure}[H]
+            \centering
+            \includegraphics[width=0.65\textwidth]{RocketC.png}
+            \caption{The results of the data set of Rocket C.}
+            \label{fig:RocketC}
+        \end{figure}
+
+        \begin{figure}[H]
+            \centering
+            \includegraphics[width=0.65\textwidth]{RocketD.png}
+            \caption{The results of the data set of Rocket D.}
+            \label{fig:RocketD}
+        \end{figure}
+
+        \begin{figure}[H]
+            \centering
+            \includegraphics[width=0.65\textwidth]{RocketE.png}
+            \caption{The results of the data set of Rocket E.}
+            \label{fig:RocketE}
+        \end{figure}
+
+        The maximum displacement with its corresponding uncertainty was found for each rocket, and is summarised in Table \ref{tab:final-results} below. The maximum displacements with coverage factors of 1, 2 and 3 were all plotted in Figure \ref{fig:max-disps}. 
+
+        \begin{table}[H]
+            \centering
+            \begin{tabular}{|c|c|c|c|c|c|}
+            \hline
+                Rocket & A & B & C & D & E \\
+                \hline
+                Maximum Displacement (m) & 20.509 & 19.986 & 11.308 & 25.428 & 16.077 \\
+                \hline
+                Uncertainty ($10^{-2}$ m) & 1.382 & 0.940 & 1.003 & 1.285 & 0.799 \\
+                \hline
+            \end{tabular}
+            \caption{The maximum displacements for each rocket, with the corresponding propagated uncertainty.}
+            \label{tab:final-results}
+        \end{table}
+
+        \begin{figure}[H]
+            \centering
+            \includegraphics[width = 0.8\textwidth]{max_disp.png}
+            \caption{The maximum displacements and corresponding uncertainties with coverage factors of 1, 2 and 3 for each rocket.}
+            \label{fig:max-disps}
+        \end{figure}
+
+        From the results, it is clear that Rocket D is the winner of the competition. As the uncertainties are so small, increasing the coverage factor up to 3 made no difference to the results. 
+
+\printbibliography
+
+\end{document}
